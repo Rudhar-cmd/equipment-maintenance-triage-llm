@@ -1,0 +1,23 @@
+Industrial Compressor Maintenance Manual
+
+Section: Bearing and vibration inspection
+Page: 1
+Inspect bearings when vibration or temperature exceeds operating limits.
+Check abnormal heat, unusual noise, lubrication problems, visible damage,
+loose mounting, alignment problems, and mechanical imbalance.
+
+Section: Temperature
+Page: 2
+Sustained motor temperature above 90°C should be investigated.
+Temperature alone does not establish the root cause.
+
+Section: Vibration
+Page: 3
+Vibration above 7 mm/s should be investigated. Possible contributors include
+mechanical imbalance, misalignment, loose mounting, or bearing problems.
+These are possible causes and require technician inspection before confirmation.
+
+Section: Maintenance response
+Page: 4
+Document readings, inspect the affected assembly, record findings, and obtain
+technician approval before maintenance work is authorized.

@@ -1,0 +1,13 @@
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import mongoose from "mongoose";
+import equipment from "./routes/equipment.js";
+import issues from "./routes/issues.js";
+import workOrders from "./routes/workOrders.js";
+const app=express();
+app.use(cors()); app.use(express.json());
+app.get("/api/health",(req,res)=>res.json({ok:true,service:"backend"}));
+app.use("/api/equipment",equipment); app.use("/api/issues",issues); app.use("/api/work-orders",workOrders);
+const port=process.env.PORT||5000;
+mongoose.connect(process.env.MONGODB_URI).then(()=>app.listen(port,()=>console.log(`Backend running on ${port}`))).catch(e=>{console.error(e);process.exit(1)});
