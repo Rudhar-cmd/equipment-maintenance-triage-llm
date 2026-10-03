@@ -11,10 +11,6 @@ from google import genai
 from pydantic import BaseModel, Field
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
 load_dotenv()
 
 app = FastAPI(
@@ -29,10 +25,6 @@ MODEL = os.getenv(
 KB = Path(__file__).parent / "knowledge_base"
 
 
-# ============================================================
-# Request Model
-# ============================================================
-
 class AnalyzeRequest(BaseModel):
     equipment: Dict[str, Any]
     issue: Dict[str, Any]
@@ -43,10 +35,6 @@ class AnalyzeRequest(BaseModel):
         default_factory=list
     )
 
-
-# ============================================================
-# Knowledge Base Retrieval
-# ============================================================
 
 def retrieve_evidence(
     payload: AnalyzeRequest
@@ -111,15 +99,11 @@ def retrieve_evidence(
 
         score = 0
 
-        # Match query words
         for word in query_words:
-
             if len(word) >= 4 and word in section_lower:
                 score += 1
 
-        # Match important maintenance keywords
         for keyword in keywords:
-
             if (
                 keyword in query
                 and keyword in section_lower
@@ -149,40 +133,26 @@ def retrieve_evidence(
         reverse=True
     )
 
-    cleaned_results = []
+    return [
+        {
+            "source": item["source"],
+            "section": item["section"],
+            "text": item["text"],
+        }
+        for item in results[:5]
+    ]
 
-    for item in results[:5]:
-
-        cleaned_results.append(
-            {
-                "source": item["source"],
-                "section": item["section"],
-                "text": item["text"],
-            }
-        )
-
-    return cleaned_results
-
-
-# ============================================================
-# Deterministic Priority
-# ============================================================
 
 def calculate_priority(
     payload: AnalyzeRequest
 ) -> str:
 
     for check in payload.thresholdChecks:
-
         if check.get("triggered") is True:
             return "HIGH"
 
     return "MEDIUM"
 
-
-# ============================================================
-# Deterministic Observations
-# ============================================================
 
 def build_observations(
     payload: AnalyzeRequest
@@ -192,21 +162,12 @@ def build_observations(
 
     issue = payload.issue
 
-    # --------------------------------------------------------
-    # Technician-reported issue
-    # --------------------------------------------------------
-
     description = issue.get("description")
 
     if description:
-
         observations.append(
             f"Technician reported: {description}"
         )
-
-    # --------------------------------------------------------
-    # Operating events
-    # --------------------------------------------------------
 
     operating_events = issue.get(
         "operatingEvents",
@@ -229,16 +190,15 @@ def build_observations(
                     event.get("description")
                     or event.get("event")
                     or event.get("name")
+                    or event.get("value")
                 )
 
                 if event_text:
-
                     observations.append(
                         f"Recent operating event: {event_text}"
                     )
 
             elif event:
-
                 observations.append(
                     f"Recent operating event: {event}"
                 )
@@ -248,10 +208,6 @@ def build_observations(
         observations.append(
             f"Recent operating events: {operating_events}"
         )
-
-    # --------------------------------------------------------
-    # Sensor readings
-    # --------------------------------------------------------
 
     sensor_readings = issue.get(
         "sensorReadings",
@@ -295,15 +251,13 @@ def build_observations(
                     f"Reported {name}: {value}{unit}."
                 )
 
-    # --------------------------------------------------------
-    # Deterministic threshold results
-    # --------------------------------------------------------
-
     for check in payload.thresholdChecks:
 
-        name = check.get(
-            "name"
-            or "code"
+        name = (
+            check.get("name")
+            or check.get("code")
+            or check.get("id")
+            or "Threshold check"
         )
 
         message = check.get(
@@ -326,10 +280,6 @@ def build_observations(
                 f"{name}: {message} ({status})"
             )
 
-    # --------------------------------------------------------
-    # If nothing was supplied
-    # --------------------------------------------------------
-
     if not observations:
 
         observations.append(
@@ -339,9 +289,14 @@ def build_observations(
     return observations
 
 
-# ============================================================
-# Fallback Analysis
-# ============================================================
+def fallback_questions() -> List[str]:
+
+    return [
+        "When did the reported abnormal condition first begin?",
+        "Does the condition become worse when the equipment is under load?",
+        "Has the equipment or the affected component been inspected or serviced recently?"
+    ]
+
 
 def fallback_result(
     payload: AnalyzeRequest,
@@ -356,6 +311,8 @@ def fallback_result(
         payload
     )
 
+    questions = fallback_questions()
+
     return {
         "summary": (
             "The equipment issue requires "
@@ -365,9 +322,7 @@ def fallback_result(
             "threshold checks and available "
             "maintenance evidence."
         ),
-
         "observations": observations,
-
         "possible_causes": [
             {
                 "cause": (
@@ -383,26 +338,17 @@ def fallback_result(
                 "confidence": "medium"
             }
         ],
-
-        "questions_for_technician": [
-            "When did the reported abnormal condition first begin?",
-            "Does the condition become worse when the equipment is under load?",
-            "Has the equipment or the affected component been inspected or serviced recently?"
-        ],
-
+        "questions_for_technician": questions,
+        "follow_up_questions": questions,
         "inspection_steps": [
             "Inspect the equipment for visible damage or abnormal conditions.",
             "Check temperature and vibration measurements.",
             "Inspect bearings and alignment where applicable.",
             "Review recent operating events and maintenance history."
         ],
-
         "priority": priority,
-
         "work_order_draft": {
-            "title": (
-                "Equipment condition inspection"
-            ),
+            "title": "Equipment condition inspection",
             "description": (
                 "Inspect the reported equipment "
                 "condition, verify measurements, "
@@ -411,11 +357,8 @@ def fallback_result(
             ),
             "recommended_priority": priority
         },
-
         "confirmed_findings": [],
-
         "evidence": evidence,
-
         "warnings": [
             (
                 "Gemini was temporarily unavailable. "
@@ -433,10 +376,6 @@ def fallback_result(
     }
 
 
-# ============================================================
-# Gemini Analysis
-# ============================================================
-
 def analyze_with_gemini(
     payload: AnalyzeRequest,
     evidence: List[Dict[str, Any]]
@@ -447,10 +386,8 @@ def analyze_with_gemini(
     )
 
     if not api_key:
-
         raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
-            "Add it to ai-service/.env."
+            "GEMINI_API_KEY is not configured."
         )
 
     client = genai.Client(
@@ -469,62 +406,50 @@ def analyze_with_gemini(
         "retrieved_manual_evidence": evidence
     }
 
-    # --------------------------------------------------------
-    # System Instructions
-    # --------------------------------------------------------
-
     system_prompt = """
 You are an equipment maintenance triage assistant.
 
-Your job is to analyze equipment maintenance issues using:
+Analyze equipment maintenance issues using technician-provided information, deterministic threshold checks, and retrieved maintenance-manual evidence.
 
-1. Technician-provided observations.
-2. Deterministic threshold checks.
-3. Retrieved maintenance-manual evidence.
+Rules:
 
-IMPORTANT RULES:
-
-- Do NOT claim that a possible cause is confirmed.
-- Possible causes must remain hypotheses.
-- confirmed_findings MUST ALWAYS be an empty array.
+- Possible causes are hypotheses and must never be presented as confirmed findings.
+- confirmed_findings must always be an empty array.
 - Only a technician can confirm a physical finding.
 - Deterministic threshold checks are authoritative.
-- If a threshold is triggered, do not downgrade its priority.
-- Do not invent sensor readings.
-- Do not invent maintenance history.
-- Do not invent manual sections.
-- Clearly mention missing or conflicting information.
-- Recommend inspection steps rather than claiming a repair has been performed.
+- If a deterministic threshold is HIGH, priority must remain HIGH.
+- Never invent sensor readings.
+- Never invent maintenance history.
+- Never invent manual sections.
+- Clearly identify missing or conflicting information.
+- Recommend inspection steps rather than claiming a repair was performed.
 - The work order is only a draft.
 - A technician must review, edit, approve, or reject the work order.
 - Never recommend automatic equipment control.
 - Never claim that maintenance has automatically been approved.
 
-OBSERVATION RULES:
+Observations:
 
-- observations must contain only information actually supplied in the case.
-- Include technician-reported symptoms.
+- Observations must contain only information actually supplied in the case.
+- Include reported symptoms.
 - Include provided sensor readings.
 - Include relevant operating events.
-- Include deterministic threshold results when useful.
-- Do NOT turn possible causes into observations.
-- Do NOT invent observations.
-- Do NOT use observations to claim that a fault has been confirmed.
+- Include relevant threshold results.
+- Do not turn possible causes into observations.
+- Do not invent observations.
+- Do not claim an unverified fault is confirmed.
 
-FOLLOW-UP QUESTION RULES:
+Follow-up questions:
 
-- Always provide 2 to 3 targeted questions for the technician.
-- Questions must be specific to the equipment issue.
-- Questions should address missing information, uncertainty, operating conditions, recent maintenance, or symptoms that could help distinguish between possible causes.
+- Always provide 2 to 3 targeted questions.
+- Questions must be specific to this equipment issue.
+- Questions should address missing information, uncertainty, operating conditions, recent maintenance, or symptoms that help distinguish possible causes.
 - Do not ask questions whose answers are already explicitly provided.
 - Never return an empty questions_for_technician array.
+- Never return an empty follow_up_questions array.
 
 Return valid JSON only.
 """
-
-    # --------------------------------------------------------
-    # User Prompt
-    # --------------------------------------------------------
 
     user_prompt = f"""
 Analyze this equipment maintenance case.
@@ -560,6 +485,12 @@ Return exactly this JSON structure:
     "Question 3"
   ],
 
+  "follow_up_questions": [
+    "Question 1",
+    "Question 2",
+    "Question 3"
+  ],
+
   "inspection_steps": [
     "Inspection step 1"
   ],
@@ -581,44 +512,41 @@ Return exactly this JSON structure:
   ]
 }}
 
-OBSERVATION REQUIREMENTS:
+Observation requirements:
 
-- Return observations based only on the supplied case data.
+- Use only supplied case data.
 - Include reported symptoms.
 - Include supplied sensor readings.
 - Include relevant operating events.
+- Include relevant threshold results.
 - Do not invent observations.
 - Do not describe possible causes as observations.
 - Do not describe an unverified fault as a confirmed finding.
 
-FOLLOW-UP QUESTION REQUIREMENTS:
+Follow-up question requirements:
 
 - Return 2 to 3 questions.
 - Questions must be specific to this case.
-- Ask about information that is missing from the case.
-- Ask about timing, operating conditions, recent maintenance, unusual symptoms, or other information that could help distinguish between possible causes.
-- Do not simply repeat information already provided.
-- Never return an empty questions_for_technician array.
+- Ask about information missing from the case.
+- Ask about timing, operating conditions, recent maintenance, unusual symptoms, or information that helps distinguish possible causes.
+- Do not repeat information already provided.
+- Never return empty question arrays.
 
-EVIDENCE RULES:
+Evidence rules:
 
 - Use only the retrieved manual evidence supplied above.
 - Do not invent citations.
 - Do not create manual sections that were not supplied.
 - The application will replace the evidence field with the actual retrieved evidence.
 
-DETERMINISTIC PRIORITY:
+Deterministic priority:
 
 The application calculated:
 
 {priority}
 
-If this value is HIGH, your returned priority MUST be HIGH.
+If this value is HIGH, the returned priority MUST be HIGH.
 """
-
-    # ========================================================
-    # Gemini Request With Retry
-    # ========================================================
 
     max_attempts = 3
 
@@ -652,14 +580,9 @@ If this value is HIGH, your returned priority MUST be HIGH.
             )
 
             if not response.text:
-
                 raise RuntimeError(
                     "Gemini returned an empty response."
                 )
-
-            # ------------------------------------------------
-            # Parse JSON
-            # ------------------------------------------------
 
             try:
 
@@ -672,11 +595,6 @@ If this value is HIGH, your returned priority MUST be HIGH.
                 print(
                     "GEMINI JSON ERROR:",
                     repr(json_error)
-                )
-
-                print(
-                    "GEMINI RAW RESPONSE:",
-                    response.text
                 )
 
                 raise RuntimeError(
@@ -724,11 +642,6 @@ If this value is HIGH, your returned priority MUST be HIGH.
 
                 continue
 
-            print(
-                "GEMINI ERROR:",
-                repr(exc)
-            )
-
             raise RuntimeError(
                 f"Gemini API request failed: {exc}"
             ) from exc
@@ -738,48 +651,22 @@ If this value is HIGH, your returned priority MUST be HIGH.
     )
 
 
-# ============================================================
-# Grounding / Safety Layer
-# ============================================================
-
 def ground_result(
     result: Dict[str, Any],
     payload: AnalyzeRequest,
     evidence: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
 
-    # --------------------------------------------------------
-    # Never allow AI to claim confirmed findings
-    # --------------------------------------------------------
-
     result["confirmed_findings"] = []
-
-    # --------------------------------------------------------
-    # Evidence comes from our retrieval system
-    # --------------------------------------------------------
 
     result["evidence"] = evidence
 
-    # --------------------------------------------------------
-    # Deterministic observations
-    # --------------------------------------------------------
-
-    deterministic_observations = (
-        build_observations(payload)
+    result["observations"] = build_observations(
+        payload
     )
 
-    # Use the actual case data as the authoritative
-    # observation source.
-    result["observations"] = (
-        deterministic_observations
-    )
-
-    # --------------------------------------------------------
-    # Deterministic priority
-    # --------------------------------------------------------
-
-    deterministic_priority = (
-        calculate_priority(payload)
+    deterministic_priority = calculate_priority(
+        payload
     )
 
     if deterministic_priority == "HIGH":
@@ -792,48 +679,25 @@ def ground_result(
         "HIGH"
     }:
 
-        result["priority"] = (
-            deterministic_priority
-        )
-
-    # --------------------------------------------------------
-    # Ensure required arrays exist
-    # --------------------------------------------------------
+        result["priority"] = deterministic_priority
 
     if not isinstance(
         result.get("possible_causes"),
         list
     ):
+
         result["possible_causes"] = []
 
-    if not isinstance(
-        result.get("questions_for_technician"),
-        list
-    ):
-        result[
-            "questions_for_technician"
-        ] = []
-
-    if not isinstance(
-        result.get("inspection_steps"),
-        list
-    ):
-        result["inspection_steps"] = []
-
-    if not isinstance(
-        result.get("warnings"),
-        list
-    ):
-        result["warnings"] = []
-
-    # --------------------------------------------------------
-    # ALWAYS provide follow-up questions
-    # --------------------------------------------------------
-
     questions = result.get(
-        "questions_for_technician",
-        []
+        "questions_for_technician"
     )
+
+    if not isinstance(
+        questions,
+        list
+    ):
+
+        questions = []
 
     questions = [
         str(question).strip()
@@ -843,19 +707,48 @@ def ground_result(
 
     if not questions:
 
-        questions = [
-            "When did the reported abnormal condition first begin?",
-            "Does the condition become worse when the equipment is under load?",
-            "Has the equipment or the affected component been inspected or serviced recently?"
-        ]
+        existing_follow_up = result.get(
+            "follow_up_questions"
+        )
+
+        if isinstance(
+            existing_follow_up,
+            list
+        ):
+
+            questions = [
+                str(question).strip()
+                for question in existing_follow_up
+                if str(question).strip()
+            ]
+
+    if not questions:
+
+        questions = fallback_questions()
+
+    questions = questions[:3]
 
     result[
         "questions_for_technician"
-    ] = questions[:3]
+    ] = questions
 
-    # --------------------------------------------------------
-    # Required safety warning
-    # --------------------------------------------------------
+    result[
+        "follow_up_questions"
+    ] = questions
+
+    if not isinstance(
+        result.get("inspection_steps"),
+        list
+    ):
+
+        result["inspection_steps"] = []
+
+    if not isinstance(
+        result.get("warnings"),
+        list
+    ):
+
+        result["warnings"] = []
 
     hypothesis_warning = (
         "Possible causes are hypotheses "
@@ -870,10 +763,6 @@ def ground_result(
             hypothesis_warning
         )
 
-    # --------------------------------------------------------
-    # Human review requirement
-    # --------------------------------------------------------
-
     review_warning = (
         "Technician review is required "
         "before maintenance action."
@@ -886,10 +775,6 @@ def ground_result(
         result["warnings"].append(
             review_warning
         )
-
-    # --------------------------------------------------------
-    # Sensor conflicts
-    # --------------------------------------------------------
 
     if payload.conflicts:
 
@@ -906,10 +791,6 @@ def ground_result(
             result["warnings"].append(
                 conflict_warning
             )
-
-    # --------------------------------------------------------
-    # Missing sensor data
-    # --------------------------------------------------------
 
     sensor_readings = payload.issue.get(
         "sensorReadings"
@@ -932,10 +813,6 @@ def ground_result(
                 sensor_warning
             )
 
-    # --------------------------------------------------------
-    # Ensure work order exists
-    # --------------------------------------------------------
-
     if not isinstance(
         result.get("work_order_draft"),
         dict
@@ -955,7 +832,6 @@ def ground_result(
             )
         }
 
-    # Always synchronize work order priority
     result[
         "work_order_draft"
     ][
@@ -964,10 +840,6 @@ def ground_result(
 
     return result
 
-
-# ============================================================
-# Health Endpoint
-# ============================================================
 
 @app.get("/health")
 def health():
@@ -980,10 +852,6 @@ def health():
     }
 
 
-# ============================================================
-# Analyze Endpoint
-# ============================================================
-
 @app.post("/analyze")
 def analyze(
     payload: AnalyzeRequest
@@ -995,10 +863,6 @@ def analyze(
             "Received maintenance analysis request."
         )
 
-        # ----------------------------------------------------
-        # 1. Retrieve manual evidence
-        # ----------------------------------------------------
-
         evidence = retrieve_evidence(
             payload
         )
@@ -1007,10 +871,6 @@ def analyze(
             f"Retrieved {len(evidence)} "
             f"manual evidence section(s)."
         )
-
-        # ----------------------------------------------------
-        # 2. Call Gemini
-        # ----------------------------------------------------
 
         try:
 
@@ -1029,18 +889,10 @@ def analyze(
                 repr(gemini_error)
             )
 
-            # ------------------------------------------------
-            # Fallback
-            # ------------------------------------------------
-
             result = fallback_result(
                 payload,
                 evidence
             )
-
-        # ----------------------------------------------------
-        # 3. Apply grounding/safety rules
-        # ----------------------------------------------------
 
         result = ground_result(
             result,
@@ -1068,10 +920,6 @@ def analyze(
             )
         )
 
-
-# ============================================================
-# Local Development Entry Point
-# ============================================================
 
 if __name__ == "__main__":
 
